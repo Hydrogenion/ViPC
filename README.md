@@ -28,7 +28,10 @@ For each object, the dataset include partial point cloud (``ShapeNetViPC-Patial`
 
 <!-- Tip: A [small dataset]() can help you to verify your code. -->
 
+``unzip train_test_list.zip``, you will get train and test list.
 Use the code in  ``utils/dataloader.py`` to load the dataset.
+
+The remaining code will be open source soon!!!
 
 ## License
 Our code is released under MIT License (see LICENSE file for details).
