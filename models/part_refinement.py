@@ -8,6 +8,8 @@ import cv2
 from sklearn.preprocessing import MinMaxScaler
 from torch.autograd import Variable
 
+os.environ['CUDA_VISIBLE_DEVICES']='4'
+
 def gen_grid_up(up_rtatio):
     sqrted = int(math.sqrt(up_rtatio))+1
     for i in range(1,sqrted+1).__reversed__():
@@ -22,6 +24,11 @@ def gen_grid_up(up_rtatio):
     grid = torch.reshape(torch.stack([x,y], axis=-1), [-1,2])
     return grid.to('cuda')
 
+def contract_expand(inputs, up_rtatio):
+    net = inputs
+    net = torch.reshape(net, [net.shape[0], net.shape[1], up_rtatio, -1])
+    net = net.permute(0, 1, 3, 2)
+    return net
 
 class ProjectionLayer(nn.Module):
     def __init__(self):
@@ -94,19 +101,18 @@ class PartRefinement(nn.Module):
 
 
         self.mlp1 = nn.Linear(1024,128)
-        self.conv1d_1 = nn.Conv1d(3013,1024,1)
-        self.conv1d_2 = nn.Conv1d(1024,128,1)
-        self.conv1d_3 = nn.Conv1d(128,64,1)
+        self.conv1d_1 = nn.Conv1d(2056,128,1)
+        self.conv1d_2 = nn.Conv1d(128,64,1)
 
         self.conv2d_1 = nn.Conv2d(64,64,[1,self.up_ratio])
         self.conv2d_2 = nn.Conv2d(64,128,[1,1])
-        self.conv2d_3 = nn.Conv2d(64,32,[1,1])
+        self.conv2d_3 = nn.Conv2d(64,64,[1,1])
 
-        self.conv1d_4 = nn.Conv1d(64,512,1)
-        self.conv1d_5 = nn.Conv1d(512,512,1)
-        self.conv1d_6 = nn.Conv1d(512,6,1)
+        self.conv1d_3 = nn.Conv1d(64,512,1)
+        self.conv1d_4 = nn.Conv1d(512,512,1)
+        self.conv1d_5 = nn.Conv1d(512,6,1)
 
-        self.fc = nn.Linear(1*1024,1*1024)
+        self.fc = nn.Linear(3*960,3*1024)
         self.feat = None
 
 
@@ -122,7 +128,8 @@ class PartRefinement(nn.Module):
         for i,key in enumerate(img_fea):
             img_fea[i] = torch.squeeze(key)
         level0_squeeze = torch.squeeze(level0)
-        img_proj_feat = self.projection(img_fea,level0_squeeze.permute(1,0))
+        img_proj_feat = self.projection(img_fea,level0_squeeze)
+        img_proj_feat = self.fc(img_proj_feat.unsqueeze(0).view(batch_size,-1)).view(batch_size,3,-1)
 
         num_fine = rate*input_point_nums
         grid = gen_grid_up(rate**(0+1))
@@ -138,8 +145,8 @@ class PartRefinement(nn.Module):
         global_feat = code.unsqueeze(2).repeat(1,1,int(num_fine/2))
         generate_feat = global_code.unsqueeze(2).repeat(1,1,int(num_fine/2))
 
-        img_proj_feat = img_proj_feat.permute(1,0).unsqueeze(0)
-        img_proj_feat = self.fc(img_proj_feat)
+        img_proj_feat = img_proj_feat.unsqueeze(2).repeat(1,1,1,1)
+        img_proj_feat = torch.reshape(img_proj_feat,[-1,3,int(num_fine/2)])
         
         feat = torch.cat([grid_feat,point_feat,global_feat,generate_feat,img_proj_feat],axis=1)
         self.feat = feat
@@ -147,10 +154,8 @@ class PartRefinement(nn.Module):
         # Dynamic Offset Predictor
         feat1 = self.conv1d_1(feat)
         feat1 = self.conv1d_2(feat1)
-        feat1 = self.conv1d_3(feat1)
         feat1 = F.relu(feat1)
-
-        feat2 = feat1.unsqueeze(-1).repeat(1,1,1,2)
+        feat2 = contract_expand(feat1, 2)
         feat2 = self.conv2d_1(feat2)
         feat2 = self.conv2d_2(feat2)
 
@@ -160,14 +165,14 @@ class PartRefinement(nn.Module):
 
         feat = feat1 + feat2
 
+        feat = self.conv1d_3(feat)
         feat = self.conv1d_4(feat)
         feat = self.conv1d_5(feat)
-        feat = self.conv1d_6(feat)
         offset = feat.view(-1,3,2048)
 
         fine = offset + point_out
 
-        return offset.permute(0,2,1)
+        return fine.permute(0,2,1)
 
 
 if __name__ == "__main__":
